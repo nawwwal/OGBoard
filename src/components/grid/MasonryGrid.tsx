@@ -5,13 +5,16 @@ interface Props {
 
 export default function MasonryGrid({ children, columns = 3 }: Props) {
   const colClass = {
-    2: 'columns-1 sm:columns-2',
-    3: 'columns-1 sm:columns-2 lg:columns-3',
-    4: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4',
+    2: 'grid-cols-1 sm:grid-cols-2',
+    3: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
+    4: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4',
   }[columns]
 
   return (
-    <div className={`${colClass} gap-4 [column-fill:_balance]`}>
+    <div
+      className={`grid ${colClass} gap-4 items-start`}
+      style={{ gridTemplateRows: 'masonry' }}
+    >
       {children}
     </div>
   )

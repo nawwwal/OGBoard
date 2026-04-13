@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useServerFn } from '@tanstack/react-start'
 import { ogQueryOptions } from '#/queries/og.queries'
@@ -10,12 +10,40 @@ import {
   patchWorkspaceFn,
 } from '#/functions/workspace.functions'
 import { useBulkOGFetch } from '#/hooks/useBulkOGFetch'
+import {
+  useLocalCollections,
+  SYSTEM_COLLECTION_DYNAMIC,
+  SYSTEM_COLLECTION_STATIC,
+} from '#/hooks/useLocalCollections'
 import StickyInputBar from '#/components/layout/StickyInputBar'
+import type { StickyInputBarRef } from '#/components/layout/StickyInputBar'
+import CollectionChips from '#/components/layout/CollectionChips'
+import CreateCollectionModal from '#/components/layout/CreateCollectionModal'
+import CommandPalette from '#/components/layout/CommandPalette'
 import MasonryGrid from '#/components/grid/MasonryGrid'
 import OGCard from '#/components/cards/OGCard'
+import CardContextMenu from '#/components/cards/CardContextMenu'
 import DetailDrawer from '#/components/layout/DetailDrawer'
-import SaveButton from '#/components/collection/SaveButton'
 import type { OGResult } from '#/server/og/scrape.server'
+
+interface ContextMenuState {
+  x: number
+  y: number
+  url: string
+  imageUrl: string
+}
+
+async function copyImageBinary(src: string) {
+  try {
+    const res = await fetch(src)
+    const blob = await res.blob()
+    if (blob.type.startsWith('image/')) {
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+      return
+    }
+  } catch { /* CORS — fall through */ }
+  await navigator.clipboard.writeText(src).catch(() => {})
+}
 
 export const Route = createFileRoute('/')({
   component: HomePage,
@@ -66,9 +94,16 @@ function HomePage() {
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null)
   const [hasRestoredWorkspace, setHasRestoredWorkspace] = useState(false)
   const [workspaceMeta, setWorkspaceMeta] = useState<PersistedWorkspaceBackendMeta | null>(null)
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showCommandPalette, setShowCommandPalette] = useState(false)
+  const [pendingCollectionUrl, setPendingCollectionUrl] = useState<string | null>(null)
   const queryClient = useQueryClient()
   const { fetchBulk, progress } = useBulkOGFetch()
+  const { collections, createCollection, addUrl, removeUrl, deleteCollection, renameCollection } = useLocalCollections()
   const restoredRef = useRef(false)
+  const inputBarRef = useRef<StickyInputBarRef>(null)
   const createWorkspace = useServerFn(createWorkspaceFn)
   const getWorkspace = useServerFn(getWorkspaceFn)
   const patchWorkspace = useServerFn(patchWorkspaceFn)
@@ -76,6 +111,11 @@ function HomePage() {
   const isSavingRef = useRef(false)
   const pendingSaveRef = useRef(false)
   const latestWorkspaceRef = useRef<PersistedWorkspace | null>(null)
+  const selectedUrlRef = useRef(selectedUrl)
+  const filteredUrlsRef = useRef<string[]>([])
+  useEffect(() => {
+    selectedUrlRef.current = selectedUrl
+  }, [selectedUrl])
 
   function hydrateWorkspace(workspace: PersistedWorkspace) {
     for (const entry of workspace.entries) {
@@ -106,6 +146,88 @@ function HomePage() {
     }
     return map
   }, [urls, queryClient, progress.completed])
+
+  const systemCounts = useMemo(() => {
+    let dynamic = 0, staticCount = 0
+    for (const [, data] of ogDataMap) {
+      if (data.detection.label === 'Dynamic') dynamic++
+      else staticCount++
+    }
+    return { dynamic, static: staticCount }
+  }, [ogDataMap])
+
+  const filteredUrls = useMemo(() => {
+    if (activeCollectionId === null) return urls
+    if (activeCollectionId === SYSTEM_COLLECTION_DYNAMIC)
+      return urls.filter((u) => ogDataMap.get(u)?.detection.label === 'Dynamic')
+    if (activeCollectionId === SYSTEM_COLLECTION_STATIC)
+      return urls.filter((u) => { const d = ogDataMap.get(u); return d && d.detection.label !== 'Dynamic' })
+    const col = collections.find((c) => c.id === activeCollectionId)
+    return col ? urls.filter((u) => col.urls.includes(u)) : urls
+  }, [urls, activeCollectionId, collections, ogDataMap])
+
+  useEffect(() => {
+    filteredUrlsRef.current = filteredUrls
+  }, [filteredUrls])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowCommandPalette((value) => !value)
+        return
+      }
+
+      const activeElement = document.activeElement as HTMLElement | null
+      const tag = activeElement?.tagName
+      const isInputFocused =
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        activeElement?.isContentEditable
+
+      if (e.key === '/' && !isInputFocused) {
+        e.preventDefault()
+        inputBarRef.current?.focus()
+        return
+      }
+
+      if (!isInputFocused && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const currentUrl = selectedUrlRef.current
+        const visibleUrls = filteredUrlsRef.current
+        if (!currentUrl || visibleUrls.length === 0) return
+
+        const currentIndex = visibleUrls.indexOf(currentUrl)
+        if (currentIndex === -1) return
+
+        const nextIndex =
+          e.key === 'ArrowLeft'
+            ? Math.max(0, currentIndex - 1)
+            : Math.min(visibleUrls.length - 1, currentIndex + 1)
+
+        if (nextIndex !== currentIndex) {
+          e.preventDefault()
+          setSelectedUrl(visibleUrls[nextIndex])
+        }
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent, url: string) => {
+      e.preventDefault()
+      setContextMenu({ x: e.clientX, y: e.clientY, url, imageUrl: ogDataMap.get(url)?.image ?? '' })
+    },
+    [ogDataMap],
+  )
+
+  function handleCreateCollection(name: string, color: string) {
+    const col = createCollection(name, color)
+    if (pendingCollectionUrl) { addUrl(col.id, pendingCollectionUrl); setPendingCollectionUrl(null) }
+    setShowCreateModal(false)
+  }
 
   useEffect(() => {
     if (restoredRef.current) return
@@ -304,7 +426,21 @@ function HomePage() {
 
   return (
     <>
-      <StickyInputBar onFetch={handleFetch} progress={progress} />
+      <StickyInputBar ref={inputBarRef} onFetch={handleFetch} progress={progress} />
+
+      {urls.length > 0 && (
+        <CollectionChips
+          collections={collections}
+          activeId={activeCollectionId}
+          totalCount={urls.length}
+          dynamicCount={systemCounts.dynamic}
+          staticCount={systemCounts.static}
+          onSelect={setActiveCollectionId}
+          onCreateNew={() => { setPendingCollectionUrl(null); setShowCreateModal(true) }}
+          onDelete={(id) => { deleteCollection(id); if (activeCollectionId === id) setActiveCollectionId(null) }}
+          onRename={renameCollection}
+        />
+      )}
 
       <main className="px-5 py-6 mx-auto max-w-6xl">
         {hasRestoredWorkspace && urls.length === 0 ? (
@@ -317,36 +453,37 @@ function HomePage() {
                 className="font-semibold tracking-[0.12em] uppercase"
                 style={{ fontSize: '10px', color: 'oklch(56% 0.016 68)', fontFamily: 'var(--font-sans)' }}
               >
-                {urls.length} {urls.length === 1 ? 'URL' : 'URLs'}
+                {filteredUrls.length}
+                {activeCollectionId ? ` of ${urls.length}` : ''}{' '}
+                {filteredUrls.length === 1 ? 'card' : 'cards'}
                 {progress.inProgress && (
                   <span style={{ color: 'oklch(50% 0.19 55)', marginLeft: '8px' }}>
                     {progress.completed}/{progress.total} fetched
                   </span>
                 )}
               </p>
-              <div className="flex items-center gap-3">
-                <SaveButton urls={urls} ogDataMap={ogDataMap} />
-                <button
-                  onClick={() => {
-                    void handleClear()
-                  }}
-                  className="font-semibold tracking-[0.12em] uppercase transition-opacity"
-                  style={{
-                    fontSize: '10px',
-                    color: 'oklch(60% 0.014 68)',
-                    fontFamily: 'var(--font-sans)',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = 'oklch(40% 0.016 65)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = 'oklch(60% 0.014 68)')}
-                >
-                  Clear
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleClear()
+                }}
+                disabled={progress.inProgress}
+                className="font-semibold tracking-[0.12em] uppercase transition-opacity"
+                style={{
+                  fontSize: '10px',
+                  color: 'oklch(60% 0.014 68)',
+                  fontFamily: 'var(--font-sans)',
+                  opacity: progress.inProgress ? 0.45 : 1,
+                  cursor: progress.inProgress ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Clear
+              </button>
             </div>
 
             <MasonryGrid>
-              {urls.map((url) => (
-                <div key={url} className="mb-4">
+              {filteredUrls.map((url) => (
+                <div key={url} onContextMenu={(e) => handleContextMenu(e, url)}>
                   <OGCard
                     url={url}
                     onSelect={() => setSelectedUrl(url)}
@@ -356,6 +493,17 @@ function HomePage() {
                 </div>
               ))}
             </MasonryGrid>
+
+            {filteredUrls.length === 0 && activeCollectionId && (
+              <div className="flex flex-col items-center justify-center min-h-[28vh] gap-2 text-center">
+                <p style={{ fontSize: '13px', color: 'oklch(56% 0.016 68)', fontFamily: 'var(--font-sans)' }}>
+                  No cards in this collection yet.
+                </p>
+                <p style={{ fontSize: '12px', color: 'oklch(64% 0.014 68)', fontFamily: 'var(--font-sans)' }}>
+                  Right-click any card to add it.
+                </p>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -365,6 +513,54 @@ function HomePage() {
         snapshotData={selectedUrl ? ogDataMap.get(selectedUrl) ?? null : null}
         onClose={() => setSelectedUrl(null)}
       />
+
+      {contextMenu && (
+        <CardContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          url={contextMenu.url}
+          imageUrl={contextMenu.imageUrl}
+          collections={collections}
+          memberIds={collections.filter((c) => c.urls.includes(contextMenu.url)).map((c) => c.id)}
+          onClose={() => setContextMenu(null)}
+          onInspect={() => setSelectedUrl(contextMenu.url)}
+          onCopyImageUrl={() => navigator.clipboard.writeText(contextMenu.imageUrl || contextMenu.url).catch(() => {})}
+          onCopyImage={() => copyImageBinary(contextMenu.imageUrl || contextMenu.url)}
+          onOpenUrl={() => window.open(contextMenu.url, '_blank', 'noopener,noreferrer')}
+          onRemove={() => {
+            setUrls((prev) => prev.filter((u) => u !== contextMenu.url))
+            if (selectedUrl === contextMenu.url) setSelectedUrl(null)
+          }}
+          onToggleCollection={(colId, isMember) => {
+            if (isMember) removeUrl(colId, contextMenu.url)
+            else addUrl(colId, contextMenu.url)
+          }}
+          onNewCollection={() => { setPendingCollectionUrl(contextMenu.url); setShowCreateModal(true) }}
+        />
+      )}
+
+      {showCreateModal && (
+        <CreateCollectionModal
+          onConfirm={handleCreateCollection}
+          onCancel={() => { setShowCreateModal(false); setPendingCollectionUrl(null) }}
+          initialColorIndex={collections.length}
+        />
+      )}
+
+      {showCommandPalette && (
+        <CommandPalette
+          urls={urls}
+          ogDataMap={ogDataMap}
+          collections={collections}
+          dynamicCount={systemCounts.dynamic}
+          staticCount={systemCounts.static}
+          onClose={() => setShowCommandPalette(false)}
+          onInspect={(url) => setSelectedUrl(url)}
+          onSelectCollection={setActiveCollectionId}
+          onFocusInput={() => inputBarRef.current?.focus()}
+          onAddUrl={handleFetch}
+        />
+      )}
     </>
   )
 }

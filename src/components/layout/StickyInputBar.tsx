@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react'
-import { isValidUrl, parseUrlList } from '#/lib/domain'
+import { useState, useRef, forwardRef, useImperativeHandle } from 'react'
+import { isValidUrl, normalizeUserInputUrl, parseUrlList } from '#/lib/domain'
 import type { BulkProgress } from '#/hooks/useBulkOGFetch'
 
 interface Props {
@@ -9,9 +9,27 @@ interface Props {
   placeholder?: string
 }
 
-export default function StickyInputBar({ onFetch, progress, disabled = false, placeholder }: Props) {
+export interface StickyInputBarRef {
+  focus: () => void
+}
+
+const StickyInputBar = forwardRef<StickyInputBarRef, Props>(function StickyInputBar(
+  { onFetch, progress, disabled = false, placeholder },
+  ref,
+) {
   const [value, setValue] = useState('')
   const [isBulk, setIsBulk] = useState(false)
+  const singleRef = useRef<HTMLInputElement>(null)
+  const bulkRef = useRef<HTMLTextAreaElement>(null)
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      const el = isBulk ? bulkRef.current : singleRef.current
+      el?.focus()
+      el?.select()
+    },
+  }), [isBulk])
+
   const isBusy = !!progress?.inProgress
   const progressPct =
     progress && progress.total > 0
@@ -25,7 +43,12 @@ export default function StickyInputBar({ onFetch, progress, disabled = false, pl
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const urls = isBulk ? parseUrlList(value) : [value.trim()].filter(isValidUrl)
+    const urls = isBulk
+      ? parseUrlList(value)
+      : (() => {
+          const normalized = normalizeUserInputUrl(value)
+          return normalized && isValidUrl(normalized) ? [normalized] : []
+        })()
     if (urls.length === 0) return
     onFetch(urls)
     setValue('')
@@ -34,17 +57,18 @@ export default function StickyInputBar({ onFetch, progress, disabled = false, pl
 
   return (
     <div
-      className="sticky z-40 px-5 py-3"
+      className="sticky z-40"
       style={{
         top: '48px',
         backgroundColor: 'oklch(95% 0.012 75)',
         borderBottom: '1px solid oklch(86% 0.012 70)',
       }}
     >
-      <form onSubmit={handleSubmit} className="mx-auto flex max-w-4xl gap-2 items-start">
+      <form onSubmit={handleSubmit} className="mx-auto flex max-w-6xl gap-2 items-start px-5 py-3">
         <div className="relative flex-1 min-w-0">
           {isBulk ? (
             <textarea
+              ref={bulkRef}
               value={value}
               onChange={(e) => handleChange(e.target.value)}
               placeholder={placeholder ?? 'Paste URLs, one per line — up to 50'}
@@ -67,6 +91,7 @@ export default function StickyInputBar({ onFetch, progress, disabled = false, pl
             />
           ) : (
             <input
+              ref={singleRef}
               type="text"
               inputMode="url"
               value={value}
@@ -91,6 +116,28 @@ export default function StickyInputBar({ onFetch, progress, disabled = false, pl
               onBlur={(e) => (e.target.style.borderColor = 'oklch(82% 0.016 68)')}
               disabled={isBusy || disabled}
             />
+          )}
+
+          {/* ⌘K hint — shown when input is empty and not in bulk mode */}
+          {!isBulk && !value && (
+            <div
+              className="absolute inset-y-0 right-0 flex items-center pointer-events-none"
+              style={{ paddingRight: '10px' }}
+            >
+              <kbd style={{
+                fontSize: '10px',
+                padding: '2px 5px',
+                borderRadius: '3px',
+                backgroundColor: 'oklch(93% 0.010 72)',
+                border: '1px solid oklch(84% 0.012 70)',
+                color: 'oklch(56% 0.016 68)',
+                fontFamily: 'var(--font-sans)',
+                lineHeight: 1.4,
+                letterSpacing: 0,
+              }}>
+                ⌘K
+              </kbd>
+            </div>
           )}
 
           {/* Progress bar */}
@@ -151,4 +198,6 @@ export default function StickyInputBar({ onFetch, progress, disabled = false, pl
       </form>
     </div>
   )
-}
+})
+
+export default StickyInputBar

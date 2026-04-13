@@ -674,7 +674,7 @@ function SlackUnfurl({ data }: { data: PreviewData }) {
         <p className="line-clamp-2 mt-0.5" style={{ fontSize: '11px', color: 'oklch(50% 0.016 66)' }}>{data.description}</p>
       )}
       {data.image && (
-        <img src={data.image} alt="" className="mt-2 rounded object-cover w-full" style={{ maxHeight: '130px' }} />
+        <img src={data.image} alt="" className="mt-2 rounded w-full" style={{ aspectRatio: '1.91 / 1', objectFit: 'cover' }} />
       )}
     </div>
   )
