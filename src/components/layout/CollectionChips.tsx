@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
-import type { UserCollection } from '#/hooks/useLocalCollections'
-import { SYSTEM_COLLECTION_DYNAMIC, SYSTEM_COLLECTION_STATIC } from '#/hooks/useLocalCollections'
+import type { UserCollection } from '#/lib/workspace-collections'
+import {
+  SYSTEM_COLLECTION_DYNAMIC,
+  SYSTEM_COLLECTION_STATIC,
+} from '#/lib/workspace-collections'
 
 interface Props {
   collections: UserCollection[]
@@ -8,6 +11,7 @@ interface Props {
   totalCount: number
   dynamicCount: number
   staticCount: number
+  isReadOnly?: boolean
   onSelect: (id: string | null) => void
   onCreateNew: () => void
   onDelete: (id: string) => void
@@ -26,6 +30,7 @@ export default function CollectionChips({
   totalCount,
   dynamicCount,
   staticCount,
+  isReadOnly = false,
   onSelect,
   onCreateNew,
   onDelete,
@@ -35,6 +40,7 @@ export default function CollectionChips({
   const [renamingId, setRenamingId] = useState<string | null>(null)
 
   function handleContextMenu(e: React.MouseEvent, id: string) {
+    if (isReadOnly) return
     e.preventDefault()
     setChipMenu({ id, x: e.clientX, y: e.clientY })
   }
@@ -115,34 +121,36 @@ export default function CollectionChips({
           ),
         )}
 
-        <button
-          onClick={onCreateNew}
-          className="shrink-0 flex items-center rounded-full font-semibold tracking-[0.08em] uppercase whitespace-nowrap"
-          style={{
-            fontSize: '10px',
-            padding: '5px 12px',
-            color: 'oklch(56% 0.016 68)',
-            border: '1px dashed oklch(80% 0.012 70)',
-            backgroundColor: 'transparent',
-            cursor: 'pointer',
-            fontFamily: 'var(--font-sans)',
-            transition: 'border-color 120ms ease, color 120ms ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = 'oklch(60% 0.016 68)'
-            e.currentTarget.style.color = 'oklch(40% 0.016 65)'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = 'oklch(80% 0.012 70)'
-            e.currentTarget.style.color = 'oklch(56% 0.016 68)'
-          }}
-        >
-          + New collection
-        </button>
+        {!isReadOnly && (
+          <button
+            onClick={onCreateNew}
+            className="shrink-0 flex items-center rounded-full font-semibold tracking-[0.08em] uppercase whitespace-nowrap"
+            style={{
+              fontSize: '10px',
+              padding: '5px 12px',
+              color: 'oklch(56% 0.016 68)',
+              border: '1px dashed oklch(80% 0.012 70)',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              fontFamily: 'var(--font-sans)',
+              transition: 'border-color 120ms ease, color 120ms ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'oklch(60% 0.016 68)'
+              e.currentTarget.style.color = 'oklch(40% 0.016 65)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'oklch(80% 0.012 70)'
+              e.currentTarget.style.color = 'oklch(56% 0.016 68)'
+            }}
+          >
+            + New collection
+          </button>
+        )}
       </div>
       </div>
 
-      {chipMenu && (
+      {chipMenu && !isReadOnly && (
         <ChipContextMenu
           x={chipMenu.x}
           y={chipMenu.y}

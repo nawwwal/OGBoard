@@ -5,16 +5,16 @@ import { useServerFn } from '@tanstack/react-start'
 import { ogQueryOptions } from '#/queries/og.queries'
 import {
   createWorkspaceFn,
-  deleteWorkspaceFn,
-  getWorkspaceFn,
+  getPublicWorkspaceFn,
   patchWorkspaceFn,
 } from '#/functions/workspace.functions'
 import { useBulkOGFetch } from '#/hooks/useBulkOGFetch'
 import {
-  useLocalCollections,
   SYSTEM_COLLECTION_DYNAMIC,
   SYSTEM_COLLECTION_STATIC,
-} from '#/hooks/useLocalCollections'
+  type UserCollection,
+  CHIP_COLORS,
+} from '#/lib/workspace-collections'
 import StickyInputBar from '#/components/layout/StickyInputBar'
 import type { StickyInputBarRef } from '#/components/layout/StickyInputBar'
 import CollectionChips from '#/components/layout/CollectionChips'
@@ -50,10 +50,11 @@ export const Route = createFileRoute('/')({
 })
 
 const HOME_WORKSPACE_STORAGE_KEY = 'og-home-workspace-v1'
+const HOME_WORKSPACE_ID_QUERY_KEY = 'board'
+const HOME_WORKSPACE_OWNER_TOKEN_PREFIX = 'og-home-workspace-owner:'
 
 interface PersistedWorkspaceBackendMeta {
   id: string
-  ownerToken: string
   revision: number
   updatedAt: number
 }
@@ -61,9 +62,41 @@ interface PersistedWorkspaceBackendMeta {
 interface PersistedWorkspace {
   backend: PersistedWorkspaceBackendMeta | null
   entries: Array<{ ogData: OGResult; url: string }>
+  collections: UserCollection[]
+  activeCollectionId: string | null
   selectedUrl: string | null
   urls: string[]
-  version: 1
+  version: 2
+}
+
+function workspaceOwnerTokenKey(id: string) {
+  return `${HOME_WORKSPACE_OWNER_TOKEN_PREFIX}${id}`
+}
+
+function readWorkspaceIdFromUrl(): string | null {
+  if (typeof window === 'undefined') return null
+
+  const params = new URLSearchParams(window.location.search)
+  const id = params.get(HOME_WORKSPACE_ID_QUERY_KEY)?.trim()
+  return id || null
+}
+
+function setWorkspaceIdInUrl(id: string) {
+  if (typeof window === 'undefined') return
+
+  const url = new URL(window.location.href)
+  url.searchParams.set(HOME_WORKSPACE_ID_QUERY_KEY, id)
+  window.history.replaceState({}, '', url)
+}
+
+function readWorkspaceOwnerToken(id: string): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(workspaceOwnerTokenKey(id))
+}
+
+function saveWorkspaceOwnerToken(id: string, ownerToken: string) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(workspaceOwnerTokenKey(id), ownerToken)
 }
 
 function readPersistedWorkspace(): PersistedWorkspace | null {
@@ -73,15 +106,44 @@ function readPersistedWorkspace(): PersistedWorkspace | null {
     const raw = window.localStorage.getItem(HOME_WORKSPACE_STORAGE_KEY)
     if (!raw) return null
 
-    const parsed = JSON.parse(raw) as PersistedWorkspace
-    if (parsed.version !== 1 || !Array.isArray(parsed.urls) || !Array.isArray(parsed.entries)) {
+    const parsed = JSON.parse(raw) as
+      | PersistedWorkspace
+      | (Omit<PersistedWorkspace, 'version' | 'collections' | 'activeCollectionId'> & {
+          version: 1
+          backend: (PersistedWorkspaceBackendMeta & { ownerToken?: string }) | null
+        })
+
+    if (!Array.isArray(parsed.urls) || !Array.isArray(parsed.entries)) {
       window.localStorage.removeItem(HOME_WORKSPACE_STORAGE_KEY)
       return null
     }
 
+    if (parsed.backend?.id && 'ownerToken' in parsed.backend && parsed.backend.ownerToken) {
+      saveWorkspaceOwnerToken(parsed.backend.id, parsed.backend.ownerToken)
+    }
+
     return {
-      ...parsed,
-      backend: parsed.backend ?? null,
+      version: 2,
+      backend: parsed.backend
+        ? {
+            id: parsed.backend.id,
+            revision: parsed.backend.revision,
+            updatedAt: parsed.backend.updatedAt,
+          }
+        : null,
+      urls: parsed.urls,
+      entries: parsed.entries,
+      collections:
+        'collections' in parsed && Array.isArray(parsed.collections)
+          ? parsed.collections
+          : [],
+      activeCollectionId:
+        'activeCollectionId' in parsed &&
+        (parsed.activeCollectionId === null ||
+          typeof parsed.activeCollectionId === 'string')
+          ? parsed.activeCollectionId
+          : null,
+      selectedUrl: parsed.selectedUrl ?? null,
     }
   } catch {
     window.localStorage.removeItem(HOME_WORKSPACE_STORAGE_KEY)
@@ -91,9 +153,13 @@ function readPersistedWorkspace(): PersistedWorkspace | null {
 
 function HomePage() {
   const [urls, setUrls] = useState<string[]>([])
+  const [collections, setCollections] = useState<UserCollection[]>([])
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null)
   const [hasRestoredWorkspace, setHasRestoredWorkspace] = useState(false)
   const [workspaceMeta, setWorkspaceMeta] = useState<PersistedWorkspaceBackendMeta | null>(null)
+  const [workspaceOwnerToken, setWorkspaceOwnerToken] = useState<string | null>(null)
+  const [sharedWorkspaceId, setSharedWorkspaceId] = useState<string | null>(null)
+  const [syncError, setSyncError] = useState<string | null>(null)
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -101,13 +167,12 @@ function HomePage() {
   const [pendingCollectionUrl, setPendingCollectionUrl] = useState<string | null>(null)
   const queryClient = useQueryClient()
   const { fetchBulk, progress } = useBulkOGFetch()
-  const { collections, createCollection, addUrl, removeUrl, deleteCollection, renameCollection } = useLocalCollections()
   const restoredRef = useRef(false)
   const inputBarRef = useRef<StickyInputBarRef>(null)
   const createWorkspace = useServerFn(createWorkspaceFn)
-  const getWorkspace = useServerFn(getWorkspaceFn)
+  const getPublicWorkspace = useServerFn(getPublicWorkspaceFn)
   const patchWorkspace = useServerFn(patchWorkspaceFn)
-  const deleteWorkspace = useServerFn(deleteWorkspaceFn)
+
   const isSavingRef = useRef(false)
   const pendingSaveRef = useRef(false)
   const latestWorkspaceRef = useRef<PersistedWorkspace | null>(null)
@@ -123,20 +188,32 @@ function HomePage() {
     }
 
     setUrls(workspace.urls)
+    setCollections(workspace.collections)
     setSelectedUrl(
       workspace.selectedUrl && workspace.urls.includes(workspace.selectedUrl)
         ? workspace.selectedUrl
         : null,
     )
+    setActiveCollectionId(workspace.activeCollectionId)
     setWorkspaceMeta(workspace.backend)
+    setWorkspaceOwnerToken(
+      workspace.backend ? readWorkspaceOwnerToken(workspace.backend.id) : null,
+    )
+    setSharedWorkspaceId(workspace.backend?.id ?? readWorkspaceIdFromUrl())
   }
 
   function handleFetch(newUrls: string[]) {
+    if (!canEditWorkspace) return
+
     const unique = newUrls.filter((u) => !urls.includes(u))
     if (unique.length === 0) return
     setUrls((prev) => [...prev, ...unique])
+    setSyncError(null)
     fetchBulk(unique)
   }
+
+  const canEditWorkspace =
+    sharedWorkspaceId === null || !!(workspaceMeta && workspaceOwnerToken)
 
   const ogDataMap = useMemo(() => {
     const map = new Map<string, OGResult>()
@@ -165,6 +242,19 @@ function HomePage() {
     const col = collections.find((c) => c.id === activeCollectionId)
     return col ? urls.filter((u) => col.urls.includes(u)) : urls
   }, [urls, activeCollectionId, collections, ogDataMap])
+
+  useEffect(() => {
+    if (
+      activeCollectionId === null ||
+      activeCollectionId === SYSTEM_COLLECTION_DYNAMIC ||
+      activeCollectionId === SYSTEM_COLLECTION_STATIC ||
+      collections.some((collection) => collection.id === activeCollectionId)
+    ) {
+      return
+    }
+
+    setActiveCollectionId(null)
+  }, [activeCollectionId, collections])
 
   useEffect(() => {
     filteredUrlsRef.current = filteredUrls
@@ -218,15 +308,104 @@ function HomePage() {
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, url: string) => {
       e.preventDefault()
-      setContextMenu({ x: e.clientX, y: e.clientY, url, imageUrl: ogDataMap.get(url)?.image ?? '' })
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        url,
+        imageUrl: ogDataMap.get(url)?.image ?? '',
+      })
     },
     [ogDataMap],
   )
 
   function handleCreateCollection(name: string, color: string) {
-    const col = createCollection(name, color)
-    if (pendingCollectionUrl) { addUrl(col.id, pendingCollectionUrl); setPendingCollectionUrl(null) }
+    if (!canEditWorkspace) return
+
+    const collectionId = crypto.randomUUID()
+    setCollections((current) => [
+      ...current,
+      {
+        id: collectionId,
+        name: name.trim(),
+        color: color || CHIP_COLORS[current.length % CHIP_COLORS.length],
+        urls: pendingCollectionUrl ? [pendingCollectionUrl] : [],
+      },
+    ])
+
+    if (pendingCollectionUrl) {
+      setActiveCollectionId(collectionId)
+      setPendingCollectionUrl(null)
+    }
+
+    setSyncError(null)
     setShowCreateModal(false)
+  }
+
+  function addUrlToCollection(collectionId: string, url: string) {
+    if (!canEditWorkspace) return
+
+    setCollections((current) =>
+      current.map((collection) =>
+        collection.id === collectionId && !collection.urls.includes(url)
+          ? { ...collection, urls: [...collection.urls, url] }
+          : collection,
+      ),
+    )
+    setSyncError(null)
+  }
+
+  function removeUrlFromCollection(collectionId: string, url: string) {
+    if (!canEditWorkspace) return
+
+    setCollections((current) =>
+      current.map((collection) =>
+        collection.id === collectionId
+          ? {
+              ...collection,
+              urls: collection.urls.filter((currentUrl) => currentUrl !== url),
+            }
+          : collection,
+      ),
+    )
+    setSyncError(null)
+  }
+
+  function deleteCollection(collectionId: string) {
+    if (!canEditWorkspace) return
+
+    setCollections((current) =>
+      current.filter((collection) => collection.id !== collectionId),
+    )
+    setSyncError(null)
+  }
+
+  function renameCollection(collectionId: string, newName: string) {
+    if (!canEditWorkspace) return
+
+    const trimmedName = newName.trim()
+    if (!trimmedName) return
+
+    setCollections((current) =>
+      current.map((collection) =>
+        collection.id === collectionId
+          ? { ...collection, name: trimmedName }
+          : collection,
+      ),
+    )
+    setSyncError(null)
+  }
+
+  function removeUrlFromBoard(url: string) {
+    if (!canEditWorkspace) return
+
+    setUrls((current) => current.filter((currentUrl) => currentUrl !== url))
+    setCollections((current) =>
+      current.map((collection) => ({
+        ...collection,
+        urls: collection.urls.filter((currentUrl) => currentUrl !== url),
+      })),
+    )
+    setSyncError(null)
   }
 
   useEffect(() => {
@@ -234,60 +413,91 @@ function HomePage() {
     restoredRef.current = true
 
     const persisted = readPersistedWorkspace()
-    if (persisted) {
+    const urlWorkspaceId = readWorkspaceIdFromUrl()
+    const shouldHydratePersisted =
+      !!persisted &&
+      (!urlWorkspaceId ||
+        !persisted.backend ||
+        persisted.backend.id === urlWorkspaceId)
+
+    if (persisted && shouldHydratePersisted) {
       hydrateWorkspace(persisted)
     }
+    const restoredWorkspaceId = persisted?.backend?.id ?? null
+
+    if (urlWorkspaceId) {
+      setSharedWorkspaceId(urlWorkspaceId)
+    } else if (restoredWorkspaceId) {
+      setSharedWorkspaceId(restoredWorkspaceId)
+      setWorkspaceIdInUrl(restoredWorkspaceId)
+    }
+
     setHasRestoredWorkspace(true)
   }, [queryClient])
 
   useEffect(() => {
-    if (!hasRestoredWorkspace || !workspaceMeta) return
+    if (!hasRestoredWorkspace || !sharedWorkspaceId) return
 
     let cancelled = false
 
     void (async () => {
       try {
-        const serverWorkspace = await getWorkspace({
+        const serverWorkspace = await getPublicWorkspace({
           data: {
-            id: workspaceMeta.id,
-            ownerToken: workspaceMeta.ownerToken,
+            id: sharedWorkspaceId,
           },
         })
 
         if (!serverWorkspace || cancelled) return
-        if (serverWorkspace.updatedAt <= workspaceMeta.updatedAt) return
+        if (
+          workspaceMeta?.id === sharedWorkspaceId &&
+          serverWorkspace.updatedAt <= workspaceMeta.updatedAt
+        ) {
+          return
+        }
+
+        setSyncError(null)
 
         hydrateWorkspace({
-          version: 1,
+          version: 2,
           backend: {
-            id: workspaceMeta.id,
-            ownerToken: workspaceMeta.ownerToken,
+            id: sharedWorkspaceId,
             revision: serverWorkspace.revision,
             updatedAt: serverWorkspace.updatedAt,
           },
           entries: serverWorkspace.entries.flatMap((entry) =>
             entry.ogData ? [{ url: entry.url, ogData: entry.ogData }] : [],
           ),
+          collections: serverWorkspace.collections,
+          activeCollectionId: serverWorkspace.activeCollectionId,
           selectedUrl: serverWorkspace.selectedUrl,
           urls: serverWorkspace.urls,
         })
-      } catch {
-        // Keep the latest local snapshot if the backend draft can't be restored.
+      } catch (error) {
+        if (!cancelled) {
+          setSyncError(
+            error instanceof Error
+              ? error.message
+              : 'Could not restore the shared board from Upstash.',
+          )
+        }
       }
     })()
 
     return () => {
       cancelled = true
     }
-  }, [getWorkspace, hasRestoredWorkspace, queryClient, workspaceMeta])
+  }, [getPublicWorkspace, hasRestoredWorkspace, queryClient, sharedWorkspaceId, workspaceMeta])
 
   useEffect(() => {
     if (!hasRestoredWorkspace || typeof window === 'undefined') return
 
     const payload: PersistedWorkspace = {
-      version: 1,
+      version: 2,
       backend: workspaceMeta,
       urls,
+      collections,
+      activeCollectionId,
       selectedUrl: selectedUrl && urls.includes(selectedUrl) ? selectedUrl : null,
       entries: urls.flatMap((url) => {
         const ogData = ogDataMap.get(url)
@@ -296,16 +506,24 @@ function HomePage() {
     }
     latestWorkspaceRef.current = payload
 
-    if (urls.length === 0 && !workspaceMeta) {
+    if (urls.length === 0 && collections.length === 0 && !workspaceMeta) {
       window.localStorage.removeItem(HOME_WORKSPACE_STORAGE_KEY)
       return
     }
 
     window.localStorage.setItem(HOME_WORKSPACE_STORAGE_KEY, JSON.stringify(payload))
-  }, [hasRestoredWorkspace, ogDataMap, selectedUrl, urls, workspaceMeta])
+  }, [
+    activeCollectionId,
+    collections,
+    hasRestoredWorkspace,
+    ogDataMap,
+    selectedUrl,
+    urls,
+    workspaceMeta,
+  ])
 
   useEffect(() => {
-    if (!hasRestoredWorkspace || urls.length === 0) return
+    if (!hasRestoredWorkspace || !canEditWorkspace || urls.length === 0) return
 
     const timeout = window.setTimeout(() => {
       void persistWorkspace()
@@ -314,11 +532,19 @@ function HomePage() {
     return () => {
       window.clearTimeout(timeout)
     }
-  }, [hasRestoredWorkspace, ogDataMap, selectedUrl, urls])
+  }, [
+    activeCollectionId,
+    canEditWorkspace,
+    collections,
+    hasRestoredWorkspace,
+    ogDataMap,
+    selectedUrl,
+    urls,
+  ])
 
   async function persistWorkspace() {
     const snapshot = latestWorkspaceRef.current
-    if (!snapshot || snapshot.urls.length === 0) return
+    if (!snapshot || snapshot.urls.length === 0 || !canEditWorkspace) return
 
     if (isSavingRef.current) {
       pendingSaveRef.current = true
@@ -328,26 +554,35 @@ function HomePage() {
     isSavingRef.current = true
 
     try {
-      if (!snapshot.backend) {
+      const serverSnapshot = {
+        entries: snapshot.urls.map((url) => ({
+          url,
+          ogData: snapshot.entries.find((entry) => entry.url === url)?.ogData ?? null,
+        })),
+        selectedUrl: snapshot.selectedUrl,
+        urls: snapshot.urls,
+        collections: snapshot.collections,
+        activeCollectionId: snapshot.activeCollectionId,
+      }
+
+      if (!snapshot.backend || !workspaceOwnerToken) {
         const created = await createWorkspace({
           data: {
-            snapshot: {
-              entries: snapshot.urls.map((url) => ({
-                url,
-                ogData: snapshot.entries.find((entry) => entry.url === url)?.ogData ?? null,
-              })),
-              selectedUrl: snapshot.selectedUrl,
-              urls: snapshot.urls,
-            },
+            snapshot: serverSnapshot,
           },
         })
 
         const backend = {
           id: created.id,
-          ownerToken: created.ownerToken,
           revision: created.workspace.revision,
           updatedAt: created.workspace.updatedAt,
         }
+
+        saveWorkspaceOwnerToken(created.id, created.ownerToken)
+        setWorkspaceOwnerToken(created.ownerToken)
+        setSharedWorkspaceId(created.id)
+        setWorkspaceIdInUrl(created.id)
+        setSyncError(null)
 
         latestWorkspaceRef.current = {
           ...snapshot,
@@ -358,27 +593,20 @@ function HomePage() {
         const updated = await patchWorkspace({
           data: {
             id: snapshot.backend.id,
-            ownerToken: snapshot.backend.ownerToken,
+            ownerToken: workspaceOwnerToken,
             expectedRevision: snapshot.backend.revision,
-            snapshot: {
-              entries: snapshot.urls.map((url) => ({
-                url,
-                ogData: snapshot.entries.find((entry) => entry.url === url)?.ogData ?? null,
-              })),
-              selectedUrl: snapshot.selectedUrl,
-              urls: snapshot.urls,
-            },
+            snapshot: serverSnapshot,
           },
         })
 
         if (updated) {
           const backend = {
             id: snapshot.backend.id,
-            ownerToken: snapshot.backend.ownerToken,
             revision: updated.revision,
             updatedAt: updated.updatedAt,
           }
 
+          setSyncError(null)
           latestWorkspaceRef.current = {
             ...snapshot,
             backend,
@@ -386,8 +614,10 @@ function HomePage() {
           setWorkspaceMeta(backend)
         }
       }
-    } catch {
-      // Keep local persistence even if backend draft sync fails temporarily.
+    } catch (error) {
+      setSyncError(
+        error instanceof Error ? error.message : 'Cloud sync failed for this board.',
+      )
     } finally {
       isSavingRef.current = false
 
@@ -398,35 +628,17 @@ function HomePage() {
     }
   }
 
-  async function handleClear() {
-    const meta = workspaceMeta
-
-    setUrls([])
-    setSelectedUrl(null)
-    setWorkspaceMeta(null)
-    latestWorkspaceRef.current = null
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(HOME_WORKSPACE_STORAGE_KEY)
-    }
-
-    if (!meta) return
-
-    try {
-      await deleteWorkspace({
-        data: {
-          id: meta.id,
-          ownerToken: meta.ownerToken,
-        },
-      })
-    } catch {
-      // The local workspace is already cleared; ignore backend cleanup failures.
-    }
-  }
-
   return (
     <>
-      <StickyInputBar ref={inputBarRef} onFetch={handleFetch} progress={progress} />
+      <StickyInputBar
+        ref={inputBarRef}
+        onFetch={handleFetch}
+        progress={progress}
+        disabled={!canEditWorkspace}
+        placeholder={
+          canEditWorkspace ? undefined : 'This shared board is read-only in this browser'
+        }
+      />
 
       {urls.length > 0 && (
         <CollectionChips
@@ -436,8 +648,15 @@ function HomePage() {
           dynamicCount={systemCounts.dynamic}
           staticCount={systemCounts.static}
           onSelect={setActiveCollectionId}
-          onCreateNew={() => { setPendingCollectionUrl(null); setShowCreateModal(true) }}
-          onDelete={(id) => { deleteCollection(id); if (activeCollectionId === id) setActiveCollectionId(null) }}
+          isReadOnly={!canEditWorkspace}
+          onCreateNew={() => {
+            setPendingCollectionUrl(null)
+            setShowCreateModal(true)
+          }}
+          onDelete={(id) => {
+            deleteCollection(id)
+            if (activeCollectionId === id) setActiveCollectionId(null)
+          }}
           onRename={renameCollection}
         />
       )}
@@ -449,36 +668,43 @@ function HomePage() {
           <>
             {/* Toolbar */}
             <div className="flex items-center justify-between mb-5">
-              <p
-                className="font-semibold tracking-[0.12em] uppercase"
-                style={{ fontSize: '10px', color: 'oklch(56% 0.016 68)', fontFamily: 'var(--font-sans)' }}
-              >
-                {filteredUrls.length}
-                {activeCollectionId ? ` of ${urls.length}` : ''}{' '}
-                {filteredUrls.length === 1 ? 'card' : 'cards'}
-                {progress.inProgress && (
-                  <span style={{ color: 'oklch(50% 0.19 55)', marginLeft: '8px' }}>
-                    {progress.completed}/{progress.total} fetched
-                  </span>
+              <div className="flex flex-col gap-1">
+                <p
+                  className="font-semibold tracking-[0.12em] uppercase"
+                  style={{
+                    fontSize: '10px',
+                    color: 'oklch(56% 0.016 68)',
+                    fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  {filteredUrls.length}
+                  {activeCollectionId ? ` of ${urls.length}` : ''}{' '}
+                  {filteredUrls.length === 1 ? 'card' : 'cards'}
+                  {progress.inProgress && (
+                    <span style={{ color: 'oklch(50% 0.19 55)', marginLeft: '8px' }}>
+                      {progress.completed}/{progress.total} fetched
+                    </span>
+                  )}
+                </p>
+
+                {(syncError || (sharedWorkspaceId && !canEditWorkspace)) && (
+                  <p
+                    style={{
+                      fontSize: '11px',
+                      color: syncError
+                        ? 'oklch(44% 0.15 25)'
+                        : canEditWorkspace
+                          ? 'oklch(42% 0.11 155)'
+                          : 'oklch(56% 0.016 68)',
+                      fontFamily: 'var(--font-sans)',
+                    }}
+                  >
+                    {syncError
+                      ? `Cloud sync unavailable: ${syncError}`
+                      : 'Viewing the Upstash board in read-only mode.'}
+                  </p>
                 )}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  void handleClear()
-                }}
-                disabled={progress.inProgress}
-                className="font-semibold tracking-[0.12em] uppercase transition-opacity"
-                style={{
-                  fontSize: '10px',
-                  color: 'oklch(60% 0.014 68)',
-                  fontFamily: 'var(--font-sans)',
-                  opacity: progress.inProgress ? 0.45 : 1,
-                  cursor: progress.inProgress ? 'not-allowed' : 'pointer',
-                }}
-              >
-                Clear
-              </button>
+              </div>
             </div>
 
             <MasonryGrid>
@@ -522,27 +748,34 @@ function HomePage() {
           imageUrl={contextMenu.imageUrl}
           collections={collections}
           memberIds={collections.filter((c) => c.urls.includes(contextMenu.url)).map((c) => c.id)}
+          canEdit={canEditWorkspace}
           onClose={() => setContextMenu(null)}
           onInspect={() => setSelectedUrl(contextMenu.url)}
           onCopyImageUrl={() => navigator.clipboard.writeText(contextMenu.imageUrl || contextMenu.url).catch(() => {})}
           onCopyImage={() => copyImageBinary(contextMenu.imageUrl || contextMenu.url)}
           onOpenUrl={() => window.open(contextMenu.url, '_blank', 'noopener,noreferrer')}
           onRemove={() => {
-            setUrls((prev) => prev.filter((u) => u !== contextMenu.url))
+            removeUrlFromBoard(contextMenu.url)
             if (selectedUrl === contextMenu.url) setSelectedUrl(null)
           }}
           onToggleCollection={(colId, isMember) => {
-            if (isMember) removeUrl(colId, contextMenu.url)
-            else addUrl(colId, contextMenu.url)
+            if (isMember) removeUrlFromCollection(colId, contextMenu.url)
+            else addUrlToCollection(colId, contextMenu.url)
           }}
-          onNewCollection={() => { setPendingCollectionUrl(contextMenu.url); setShowCreateModal(true) }}
+          onNewCollection={() => {
+            setPendingCollectionUrl(contextMenu.url)
+            setShowCreateModal(true)
+          }}
         />
       )}
 
-      {showCreateModal && (
+      {showCreateModal && canEditWorkspace && (
         <CreateCollectionModal
           onConfirm={handleCreateCollection}
-          onCancel={() => { setShowCreateModal(false); setPendingCollectionUrl(null) }}
+          onCancel={() => {
+            setShowCreateModal(false)
+            setPendingCollectionUrl(null)
+          }}
           initialColorIndex={collections.length}
         />
       )}
@@ -554,6 +787,7 @@ function HomePage() {
           collections={collections}
           dynamicCount={systemCounts.dynamic}
           staticCount={systemCounts.static}
+          canEdit={canEditWorkspace}
           onClose={() => setShowCommandPalette(false)}
           onInspect={(url) => setSelectedUrl(url)}
           onSelectCollection={setActiveCollectionId}

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { UserCollection } from '#/hooks/useLocalCollections'
+import type { UserCollection } from '#/lib/workspace-collections'
 
 interface Props {
   x: number
@@ -7,6 +7,7 @@ interface Props {
   url: string
   imageUrl: string
   collections: UserCollection[]
+  canEdit: boolean
   memberIds: string[]    // collection IDs this URL belongs to
   onClose: () => void
   onInspect: () => void
@@ -22,6 +23,7 @@ export default function CardContextMenu({
   x,
   y,
   collections,
+  canEdit,
   memberIds,
   onClose,
   onInspect,
@@ -83,46 +85,71 @@ export default function CardContextMenu({
 
       <Sep />
 
-      <GroupLabel>Collections</GroupLabel>
+      {canEdit && (
+        <>
+          <GroupLabel>Collections</GroupLabel>
 
-      {collections.map((col) => {
-        const isMember = memberIds.includes(col.id)
-        return (
+          {collections.map((col) => {
+            const isMember = memberIds.includes(col.id)
+            return (
+              <Item
+                key={col.id}
+                onClick={() => {
+                  onToggleCollection(col.id, isMember)
+                  onClose()
+                }}
+              >
+                <span
+                  style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    border: `1.5px solid ${col.color}`,
+                    backgroundColor: isMember ? col.color : 'transparent',
+                    display: 'inline-block',
+                    flexShrink: 0,
+                    transition: 'background-color 100ms ease',
+                  }}
+                />
+                <span className="flex-1 truncate">{col.name}</span>
+                {isMember && (
+                  <span
+                    style={{
+                      marginLeft: 'auto',
+                      color: 'oklch(50% 0.19 55)',
+                      fontSize: '11px',
+                    }}
+                  >
+                    ✓
+                  </span>
+                )}
+              </Item>
+            )
+          })}
+
           <Item
-            key={col.id}
-            onClick={() => { onToggleCollection(col.id, isMember); onClose() }}
+            onClick={() => {
+              onNewCollection()
+              onClose()
+            }}
+            muted
           >
-            <span
-              style={{
-                width: '8px',
-                height: '8px',
-                borderRadius: '50%',
-                border: `1.5px solid ${col.color}`,
-                backgroundColor: isMember ? col.color : 'transparent',
-                display: 'inline-block',
-                flexShrink: 0,
-                transition: 'background-color 100ms ease',
-              }}
-            />
-            <span className="flex-1 truncate">{col.name}</span>
-            {isMember && (
-              <span style={{ marginLeft: 'auto', color: 'oklch(50% 0.19 55)', fontSize: '11px' }}>
-                ✓
-              </span>
-            )}
+            + New collection
           </Item>
-        )
-      })}
 
-      <Item onClick={() => { onNewCollection(); onClose() }} muted>
-        + New collection
-      </Item>
+          <Sep />
 
-      <Sep />
-
-      <Item onClick={() => { onRemove(); onClose() }} danger>
-        Delete
-      </Item>
+          <Item
+            onClick={() => {
+              onRemove()
+              onClose()
+            }}
+            danger
+          >
+            Delete
+          </Item>
+        </>
+      )}
     </div>
   )
 }

@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import type { OGResult } from '#/server/og/scrape.server'
-import type { UserCollection } from '#/hooks/useLocalCollections'
-import { SYSTEM_COLLECTION_DYNAMIC, SYSTEM_COLLECTION_STATIC } from '#/hooks/useLocalCollections'
+import type { UserCollection } from '#/lib/workspace-collections'
+import {
+  SYSTEM_COLLECTION_DYNAMIC,
+  SYSTEM_COLLECTION_STATIC,
+} from '#/lib/workspace-collections'
 import { extractDomain, isValidUrl, normalizeUserInputUrl } from '#/lib/domain'
 
 interface CommandItem {
@@ -21,6 +24,7 @@ interface Props {
   collections: UserCollection[]
   dynamicCount: number
   staticCount: number
+  canEdit?: boolean
   onClose: () => void
   onInspect: (url: string) => void
   onSelectCollection: (id: string | null) => void
@@ -40,6 +44,7 @@ export default function CommandPalette({
   collections,
   dynamicCount,
   staticCount,
+  canEdit = true,
   onClose,
   onInspect,
   onSelectCollection,
@@ -64,7 +69,7 @@ export default function CommandPalette({
     const result: CommandItem[] = []
 
     // Dynamic "Fetch URL" item — only when query looks like a URL
-    if (resolvedUrl && !isAlreadyAdded) {
+    if (canEdit && resolvedUrl && !isAlreadyAdded) {
       result.push({
         id: 'action:fetch-url',
         type: 'action',
@@ -135,16 +140,21 @@ export default function CommandPalette({
     }
 
     // Action items
-    const actions: CommandItem[] = [
-      {
-        id: 'action:add-url',
-        type: 'action',
-        label: 'Add URL',
-        sublabel: 'Focus the URL input',
-        shortcut: ['/'],
-        action: () => { onFocusInput(); onClose() },
-      },
-    ]
+    const actions: CommandItem[] = canEdit
+      ? [
+          {
+            id: 'action:add-url',
+            type: 'action',
+            label: 'Add URL',
+            sublabel: 'Focus the URL input',
+            shortcut: ['/'],
+            action: () => {
+              onFocusInput()
+              onClose()
+            },
+          },
+        ]
+      : []
 
     for (const a of actions) {
       if (!q || a.label.toLowerCase().includes(q) || (a.sublabel?.toLowerCase().includes(q) ?? false)) {
@@ -153,7 +163,7 @@ export default function CommandPalette({
     }
 
     return result
-  }, [normalizedQuery, resolvedUrl, isAlreadyAdded, urls, ogDataMap, collections, dynamicCount, staticCount, onInspect, onSelectCollection, onFocusInput, onAddUrl, onClose])
+  }, [canEdit, normalizedQuery, resolvedUrl, isAlreadyAdded, urls, ogDataMap, collections, dynamicCount, staticCount, onInspect, onSelectCollection, onFocusInput, onAddUrl, onClose])
 
   const sections = useMemo(() => {
     const indexedItems = allItems.map((item, globalIndex) => ({ item, globalIndex }))

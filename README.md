@@ -11,6 +11,7 @@ Inspect Open Graph metadata and images, bulk-review URLs, and save snapshot coll
 - dynamic/build-time/static detection heuristics
 - snapshot collections stored in Redis
 - autosaved home workspace drafts stored in Redis
+- shareable home board URLs via `?board=<id>`
 - local in-memory cache fallback for non-production development
 
 ## Local Development
@@ -57,10 +58,12 @@ This app does not need a custom `vercel.json` for deployment.
 
 ## What Persists
 
+- shared home boards, including cards and collection chips
 - saved collections
-- owner tokens for collections in browser storage
-- home workspace drafts
+- owner tokens for collections and editable home boards in browser storage
+- local cache of the most recently opened board for faster restore
 - OG fetch cache and short-lived error cache
+- theme preference
 
 ## Testing
 
