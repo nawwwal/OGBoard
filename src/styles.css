@@ -1,0 +1,95 @@
+@import url("https://fonts.googleapis.com/css2?family=Abril+Fatface&family=Barlow:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* ─── Design tokens ─────────────────────────────────────────────── */
+@theme {
+  --font-display: "Abril Fatface", Georgia, serif;
+  --font-sans: "Barlow", ui-sans-serif, system-ui, sans-serif;
+
+  /* Warm cream palette — OKLCH, tinted toward amber (hue 70-75) */
+  --color-bg:            oklch(95%  0.012 75);   /* warm cream */
+  --color-surface:       oklch(99%  0.008 70);   /* near-white warm */
+  --color-surface-hover: oklch(97%  0.010 72);
+  --color-surface-mid:   oklch(93%  0.012 72);
+
+  --color-ink:    oklch(18%  0.020 55);   /* near-black, warm */
+  --color-ink-2:  oklch(44%  0.016 65);   /* secondary */
+  --color-ink-3:  oklch(60%  0.014 68);   /* tertiary/placeholder */
+
+  --color-accent:       oklch(50%  0.19  55);  /* deep amber */
+  --color-accent-dim:   oklch(44%  0.17  55);  /* muted amber */
+  --color-accent-faint: oklch(92%  0.06  75);  /* amber tint bg */
+
+  --color-border:       oklch(86%  0.012 70);
+  --color-border-mid:   oklch(82%  0.016 68);
+}
+
+/* ─── Global reset ──────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #app { min-height: 100%; }
+
+body {
+  margin: 0;
+  color: oklch(18% 0.020 55);
+  font-family: var(--font-sans);
+  background-color: oklch(95% 0.012 75);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* Subtle paper grain overlay */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='256' height='256'><filter id='n' x='0' y='0'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='256' height='256' filter='url(%23n)'/></svg>");
+  background-size: 256px 256px;
+}
+
+/* ─── Typography ────────────────────────────────────────────────── */
+.font-display { font-family: var(--font-display); }
+
+/* ─── Focus styles ──────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid oklch(50% 0.19 55);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ─── Links ─────────────────────────────────────────────────────── */
+a {
+  color: oklch(50% 0.19 55);
+  text-decoration: none;
+}
+a:hover { color: oklch(44% 0.18 55); }
+
+/* ─── Card entrance animation ───────────────────────────────────── */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.card-in {
+  animation: card-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ─── Shimmer for skeletons (light mode) ────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    oklch(93% 0.010 72) 25%,
+    oklch(88% 0.012 70) 50%,
+    oklch(93% 0.010 72) 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s infinite linear;
+}
