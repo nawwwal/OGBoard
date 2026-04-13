@@ -7,6 +7,19 @@ describe('domain helpers', () => {
     expect(normalizeUserInputUrl('vercel.com/docs')).toBe('https://vercel.com/docs')
   })
 
+  it('strips tracking params, hashes, and default ports during normalization', () => {
+    expect(
+      normalizeUserInputUrl(
+        'https://vercel.com/docs/?utm_source=x&foo=1&fbclid=abc#intro',
+      ),
+    ).toBe('https://vercel.com/docs?foo=1')
+    expect(
+      normalizeUserInputUrl(
+        'https://example.com:443/path/?b=2&utm_medium=email&a=1',
+      ),
+    ).toBe('https://example.com/path?a=1&b=2')
+  })
+
   it('accepts bare domains and rejects unsupported schemes', () => {
     expect(isValidUrl('vercel.com')).toBe(true)
     expect(isValidUrl('https://vercel.com')).toBe(true)
@@ -15,7 +28,13 @@ describe('domain helpers', () => {
   })
 
   it('parses bulk input, normalizes urls, deduplicates, and caps the list', () => {
-    const raw = ['vercel.com', 'https://vercel.com/', 'github.com', 'not a url']
+    const raw = [
+      'vercel.com',
+      'https://vercel.com/?utm_source=twitter',
+      'https://vercel.com/#hero',
+      'github.com',
+      'not a url',
+    ]
       .concat(Array.from({ length: 60 }, (_, index) => `example${index}.com`))
       .join('\n')
 
