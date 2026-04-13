@@ -9,6 +9,12 @@ import {
   patchWorkspace,
 } from '#/server/workspace/store.server'
 
+const normalizedUrlSchema = z
+  .string()
+  .min(1)
+  .transform(normalizeUserInputUrl)
+  .pipe(z.string().url())
+
 const detectionSchema = z.object({
   score: z.number(),
   label: z.enum(['Dynamic', 'Build-time', 'Static', 'Unknown']),
@@ -16,7 +22,7 @@ const detectionSchema = z.object({
 })
 
 const ogResultSchema = z.object({
-  url: z.string().min(1).transform(normalizeUserInputUrl).pipe(z.string().url()),
+  url: normalizedUrlSchema,
   title: z.string(),
   description: z.string(),
   image: z.string(),
@@ -30,8 +36,15 @@ const ogResultSchema = z.object({
 })
 
 const workspaceEntrySchema = z.object({
-  url: z.string().min(1).transform(normalizeUserInputUrl).pipe(z.string().url()),
+  url: normalizedUrlSchema,
   ogData: ogResultSchema.nullable(),
+})
+
+const workspaceCollectionSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(120),
+  color: z.string().min(1).max(64),
+  urls: z.array(normalizedUrlSchema).max(200),
 })
 
 const workspaceSnapshotSchema = z.object({
@@ -42,9 +55,9 @@ const workspaceSnapshotSchema = z.object({
     .transform(normalizeUserInputUrl)
     .pipe(z.string().url())
     .nullable(),
-  urls: z
-    .array(z.string().min(1).transform(normalizeUserInputUrl).pipe(z.string().url()))
-    .max(200),
+  urls: z.array(normalizedUrlSchema).max(200),
+  collections: z.array(workspaceCollectionSchema).max(50),
+  activeCollectionId: z.string().trim().min(1).nullable(),
 })
 
 export const getWorkspaceFn = createServerFn()
@@ -58,6 +71,18 @@ export const getWorkspaceFn = createServerFn()
   )
   .handler(async ({ data }) => {
     return getWorkspace(data.id, data.ownerToken)
+  })
+
+export const getPublicWorkspaceFn = createServerFn()
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        id: z.string().min(1),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    return getWorkspace(data.id)
   })
 
 export const createWorkspaceFn = createServerFn()

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { CHIP_COLORS } from '#/hooks/useLocalCollections'
+import { CHIP_COLORS } from '#/lib/workspace-collections'
 
 interface Props {
   onConfirm: (name: string, color: string) => void
