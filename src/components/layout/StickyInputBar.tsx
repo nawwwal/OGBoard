@@ -105,10 +105,11 @@ const StickyInputBar = forwardRef<StickyInputBarRef, Props>(function StickyInput
                 fontFamily: 'var(--font-sans)',
                 fontSize: '14px',
                 fontWeight: 400,
+                height: '40px',
                 color: 'oklch(18% 0.020 55)',
                 backgroundColor: 'oklch(99% 0.008 70)',
                 border: '1px solid oklch(82% 0.016 68)',
-                padding: '9px 14px',
+                padding: '0 14px',
                 outline: 'none',
                 transition: 'border-color 140ms ease',
               }}
@@ -153,12 +154,12 @@ const StickyInputBar = forwardRef<StickyInputBarRef, Props>(function StickyInput
         <button
           type="button"
           onClick={() => setIsBulk((b) => !b)}
-          className="h-[38px] rounded font-semibold tracking-[0.12em] uppercase"
+          className="rounded font-semibold tracking-[0.12em] uppercase"
           style={{
             fontSize: '10px',
-            padding: '0 12px',
-            border: '1px solid',
-            borderColor: isBulk ? 'oklch(50% 0.19 55)' : 'oklch(82% 0.016 68)',
+            height: '40px',
+            padding: '0 16px',
+            border: `1px solid ${isBulk ? 'oklch(50% 0.19 55)' : 'oklch(82% 0.016 68)'}`,
             color: isBulk ? 'oklch(50% 0.19 55)' : 'oklch(44% 0.016 65)',
             backgroundColor: isBulk ? 'oklch(92% 0.06 75)' : 'oklch(99% 0.008 70)',
             transition: 'all 140ms ease',
@@ -172,9 +173,10 @@ const StickyInputBar = forwardRef<StickyInputBarRef, Props>(function StickyInput
         <button
           type="submit"
           disabled={isBusy || disabled || !value.trim()}
-          className="h-[38px] rounded font-semibold tracking-[0.12em] uppercase"
+          className="rounded font-semibold tracking-[0.12em] uppercase"
           style={{
             fontSize: '10px',
+            height: '40px',
             padding: '0 20px',
             backgroundColor: 'oklch(50% 0.19 55)',
             color: 'oklch(97% 0.008 75)',
