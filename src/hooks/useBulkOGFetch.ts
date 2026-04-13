@@ -25,7 +25,7 @@ export function useBulkOGFetch() {
 
   const fetchBulk = useCallback(
     async (urls: string[]) => {
-      if (urls.length === 0) return
+      if (urls.length === 0) return new Map<string, OGResult>()
 
       const queue = new PQueue({ concurrency: CONCURRENCY })
       const results = new Map<string, OGResult>()

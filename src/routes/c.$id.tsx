@@ -1,9 +1,8 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
-import { useSuspenseQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { collectionQueryOptions } from '#/queries/collection.queries'
-import { useOwnerToken } from '#/hooks/useOwnerToken'
-import { useBulkOGFetch } from '#/hooks/useBulkOGFetch'
+import { useServerFn } from '@tanstack/react-start'
+import { nanoid } from 'nanoid'
 import StickyInputBar from '#/components/layout/StickyInputBar'
 import SortableGrid from '#/components/grid/SortableGrid'
 import MasonryGrid from '#/components/grid/MasonryGrid'
@@ -11,9 +10,11 @@ import OGCard from '#/components/cards/OGCard'
 import DetailDrawer from '#/components/layout/DetailDrawer'
 import ShareBar from '#/components/collection/ShareBar'
 import { patchCollFn } from '#/functions/collection.functions'
-import { useServerFn } from '@tanstack/react-start'
-import { nanoid } from 'nanoid'
-import type { OGResult } from '#/server/og/scrape.server'
+import { useOwnerToken } from '#/hooks/useOwnerToken'
+import { useBulkOGFetch } from '#/hooks/useBulkOGFetch'
+import { collectionQueryOptions } from '#/queries/collection.queries'
+import type { PatchCollectionInput } from '#/server/collection/contracts'
+import type { CollectionItem, CollectionPublic } from '#/server/collection/store.server'
 
 export const Route = createFileRoute('/c/$id')({
   loader: async ({ params, context: { queryClient } }) => {
@@ -23,7 +24,13 @@ export const Route = createFileRoute('/c/$id')({
   component: CollectionPage,
   notFoundComponent: () => (
     <div className="flex min-h-[60vh] items-center justify-center">
-      <p style={{ fontSize: '13px', color: 'oklch(56% 0.016 68)', fontFamily: 'var(--font-sans)' }}>
+      <p
+        style={{
+          fontSize: '13px',
+          color: 'oklch(56% 0.016 68)',
+          fontFamily: 'var(--font-sans)',
+        }}
+      >
         Collection not found
       </p>
     </div>
@@ -37,107 +44,123 @@ function CollectionPage() {
   const { isOwner, getToken } = useOwnerToken(id)
   const { fetchBulk, progress } = useBulkOGFetch()
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
-
   const patch = useServerFn(patchCollFn)
+
   const mutation = useMutation({
-    mutationFn: (args: Parameters<typeof patch>[0]['data']) =>
-      patch({ data: args }),
+    mutationFn: (data: PatchCollectionInput) => patch({ data }),
     onSuccess: (updatedCollection) => {
       if (updatedCollection) {
         queryClient.setQueryData(collectionQueryOptions(id).queryKey, updatedCollection)
-      } else {
-        queryClient.invalidateQueries({ queryKey: ['collection', id] })
+        return
       }
+
+      void queryClient.invalidateQueries({ queryKey: ['collection', id] })
     },
     onError: () => {
-      queryClient.invalidateQueries({ queryKey: ['collection', id] })
+      void queryClient.invalidateQueries({ queryKey: ['collection', id] })
     },
   })
 
   if (!collection) return null
+  const collectionQueryKey = collectionQueryOptions(id).queryKey
+  const collectionData = collection
 
-  const { items } = collection
+  function getCurrentCollection(): CollectionPublic {
+    return (
+      queryClient.getQueryData<CollectionPublic | null>(collectionQueryKey) ??
+      collectionData
+    )
+  }
+
+  function setCachedCollection(
+    updater: (current: CollectionPublic) => CollectionPublic,
+  ) {
+    queryClient.setQueryData<CollectionPublic | null | undefined>(
+      collectionQueryKey,
+      (current) => (current ? updater(current) : current),
+    )
+  }
 
   async function handleAddUrls(urls: string[]) {
     const token = getToken()
     if (!token || !isOwner) return
-    const uniqueUrls = urls.filter((url) => !items.some((i) => i.url === url))
+
+    const current = getCurrentCollection()
+    const existingUrls = new Set(current.items.map((item) => item.url))
+    const uniqueUrls = urls.filter((url) => !existingUrls.has(url))
     if (uniqueUrls.length === 0) return
 
     const fetched = await fetchBulk(uniqueUrls)
-    const newItems = uniqueUrls
-      .filter((url) => fetched.has(url))
-      .filter((url) => !items.some((i) => i.url === url))
-      .map((url, idx) => ({
-        id: nanoid(8),
-        url,
-        ogData: fetched.get(url) ?? null,
-        tags: [],
-        order: items.length + idx,
-        addedAt: Date.now(),
-      }))
+    const addedAtBase = Date.now()
+    const newItems = uniqueUrls.flatMap((url, index): CollectionItem[] => {
+      const ogData = fetched.get(url)
+      if (!ogData) return []
+
+      return [
+        {
+          id: nanoid(8),
+          url,
+          ogData,
+          tags: [],
+          order: current.items.length + index,
+          addedAt: addedAtBase + index,
+        },
+      ]
+    })
+
     if (newItems.length === 0) return
 
     try {
       await mutation.mutateAsync({
         id,
         ownerToken: token,
-        expectedRevision: collection.revision,
-        items: [...items, ...newItems],
+        expectedRevision: current.revision,
+        items: [...current.items, ...newItems],
       })
     } catch {
-      // The mutation state handles recovery by invalidating the collection query.
+      // The mutation already restores the latest collection state on error.
     }
   }
 
   function handleReorder(orderedIds: string[]) {
     const token = getToken()
     if (!token) return
-    const reordered = orderedIds.map((itemId, index) => {
-      const item = items.find((i) => i.id === itemId)!
-      return { ...item, order: index }
-    })
-    // Optimistic update
-    queryClient.setQueryData(collectionQueryOptions(id).queryKey, (old: typeof collection) =>
-      old ? { ...old, items: reordered } : old,
-    )
-    mutation.mutate({
-      id,
-      ownerToken: token,
-      expectedRevision: collection.revision,
+
+    const current = getCurrentCollection()
+    const reordered: CollectionItem[] = []
+
+    for (const [index, itemId] of orderedIds.entries()) {
+      const item = current.items.find((candidate) => candidate.id === itemId)
+      if (!item) return
+
+      reordered.push({ ...item, order: index })
+    }
+
+    setCachedCollection((cached) => ({
+      ...cached,
       items: reordered,
-    })
-  }
+      revision: current.revision + 1,
+      updatedAt: Date.now(),
+    }))
 
-  function handleTagAdd(itemId: string, tag: string) {
-    const token = getToken()
-    if (!token) return
-    const updated = items.map((i) =>
-      i.id === itemId ? { ...i, tags: [...i.tags, tag] } : i,
+    mutation.mutate(
+      {
+        id,
+        ownerToken: token,
+        expectedRevision: current.revision,
+        items: reordered,
+      },
+      {
+        onError: () => {
+          queryClient.setQueryData(collectionQueryKey, current)
+        },
+      },
     )
-    mutation.mutate({
-      id,
-      ownerToken: token,
-      expectedRevision: collection.revision,
-      items: updated,
-    })
   }
 
-  function handleTagRemove(itemId: string, tag: string) {
-    const token = getToken()
-    if (!token) return
-    const updated = items.map((i) =>
-      i.id === itemId ? { ...i, tags: i.tags.filter((t) => t !== tag) } : i
-    )
-    mutation.mutate({
-      id,
-      ownerToken: token,
-      expectedRevision: collection.revision,
-      items: updated,
-    })
-  }
-
-  const sortedItems = [...items].sort((a, b) => a.order - b.order)
+  const sortedItems = [...collectionData.items].sort(
+    (left, right) => left.order - right.order,
+  )
   const selectedItem = selectedItemId
     ? sortedItems.find((item) => item.id === selectedItemId) ?? null
     : null
@@ -148,15 +171,16 @@ function CollectionPage() {
         <StickyInputBar
           onFetch={handleAddUrls}
           progress={progress}
+          disabled={mutation.isPending}
           placeholder="Add URLs to this collection"
         />
       )}
 
       <ShareBar
         collectionId={id}
-        collectionName={collection.name}
+        collectionName={collectionData.name}
         isOwner={isOwner}
-        itemCount={items.length}
+        itemCount={collectionData.items.length}
       />
 
       <main className="px-4 py-6 mx-auto max-w-6xl">
@@ -180,7 +204,7 @@ function CollectionPage() {
         ) : (
           <MasonryGrid>
             {sortedItems.map((item) => (
-              <div key={item.id} className="mb-4">
+              <div key={item.id}>
                 <OGCard
                   url={item.url}
                   tags={item.tags}

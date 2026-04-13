@@ -1,14 +1,7 @@
 import { redis } from '#/server/redis'
-import type { OGResult } from '#/server/og/scrape.server'
+import type { CollectionItemInput } from '#/server/collection/contracts'
 
-export interface CollectionItem {
-  id: string
-  url: string
-  ogData: OGResult
-  tags: string[]
-  order: number
-  addedAt: number
-}
+export type CollectionItem = CollectionItemInput
 
 export interface Collection {
   id: string
@@ -22,13 +15,29 @@ export interface Collection {
 
 export type CollectionPublic = Omit<Collection, 'ownerToken'>
 
-function colKey(id: string) { return `col:${id}` }
+function colKey(id: string) {
+  return `col:${id}`
+}
+
+function toPublicCollection(collection: Collection): CollectionPublic {
+  const { ownerToken: _ownerToken, ...publicCollection } = collection
+  return publicCollection
+}
+
+function normalizeCollectionItems(items: CollectionItem[]): CollectionItem[] {
+  return [...items]
+    .sort((left, right) => left.order - right.order || left.addedAt - right.addedAt)
+    .map((item, index) => ({
+      ...item,
+      order: index,
+      tags: [...new Set(item.tags.map((tag) => tag.trim()))],
+    }))
+}
 
 export async function getCollection(id: string): Promise<CollectionPublic | null> {
   const col = await redis.get<Collection>(colKey(id))
   if (!col) return null
-  const { ownerToken: _stripped, ...pub } = col
-  return pub
+  return toPublicCollection(col)
 }
 
 export async function saveCollection(
@@ -45,7 +54,7 @@ export async function saveCollection(
     revision: 1,
     createdAt: now,
     updatedAt: now,
-    items,
+    items: normalizeCollectionItems(items),
   }
   await redis.set(colKey(id), col)
 }
@@ -72,11 +81,11 @@ export async function patchCollection(
   const updated: Collection = {
     ...col,
     ...patch,
+    items: patch.items ? normalizeCollectionItems(patch.items) : col.items,
     revision: col.revision + 1,
     updatedAt: Date.now(),
   }
   await redis.set(colKey(id), updated)
 
-  const { ownerToken: _stripped, ...pub } = updated
-  return pub
+  return toPublicCollection(updated)
 }

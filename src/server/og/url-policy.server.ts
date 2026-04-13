@@ -1,3 +1,4 @@
+import type { LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { normalizeUrl, normalizeUserInputUrl } from '#/lib/domain'
@@ -57,6 +58,14 @@ export function isPrivateAddress(address: string): boolean {
   return false
 }
 
+async function resolveHostnameAddresses(hostname: string): Promise<LookupAddress[]> {
+  try {
+    return await lookup(hostname, { all: true, verbatim: true })
+  } catch {
+    throw new Error('Unable to resolve URL host')
+  }
+}
+
 function isBlockedHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase()
 
@@ -88,12 +97,7 @@ export async function assertPublicHttpUrl(input: string): Promise<string> {
     throw new Error('Private and local network URLs are not allowed')
   }
 
-  let addresses: Awaited<ReturnType<typeof lookup>>
-  try {
-    addresses = await lookup(url.hostname, { all: true, verbatim: true })
-  } catch {
-    throw new Error('Unable to resolve URL host')
-  }
+  const addresses = await resolveHostnameAddresses(url.hostname)
 
   if (addresses.some((entry) => isPrivateAddress(entry.address))) {
     throw new Error('Private and local network URLs are not allowed')
